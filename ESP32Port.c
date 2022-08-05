@@ -74,13 +74,13 @@ void AD5940_RstClr(void)
 
 uint32_t AD5940_GetMCUIntFlag(void)
 {
-	return ucInterrupted;
+   return ucInterrupted;
 }
 
 uint32_t AD5940_ClrMCUIntFlag(void)
 {
-	ucInterrupted = 0;
-	return 1;
+   ucInterrupted = 0;
+   return 1;
 }
 
 /**
