@@ -33,7 +33,7 @@
 #define GPIO_MOSI      23   // D11 in Arduino UNO terms
 #define GPIO_CS        5    // D10 in Arduino UNO terms, this is a dummy pin that will not be used (AD5940 library was programmed in such a way that chip selects are handled manually)
 #define AD5940_CS_PIN  16    // this is the true CS pin, AD5940 will not work with the default CS pin.
-#define AD5940_GP0INT_PIN 14 // A1 in Arduino UNO terms
+#define AD5940_GP0INT_PIN 14 // D2 in Arduino UNO terms, this connects to GPIO0 of AF5940
 #define AD5940_RST_PIN 17    // A3/D17 in Arduino UNO terms
 
 spi_device_handle_t spi_handle; // globle handle to be in line with porting requirements
@@ -74,13 +74,28 @@ void AD5940_RstClr(void)
 
 uint32_t AD5940_GetMCUIntFlag(void)
 {
-   return ucInterrupted;
+	return ucInterrupted;
 }
 
 uint32_t AD5940_ClrMCUIntFlag(void)
 {
-   ucInterrupted = 0;
-   return 1;
+	ucInterrupted = 0;
+	return 1;
+}
+
+static void IRAM_ATTR ad5940_gpio0_isr_handler(void* arg)
+{
+    // Sometimes due to interference or ringing or something, we get two irqs after eachother. This is solved by
+    // looking at the time between interrupts and refusing any interrupt too close to another one.
+    static uint32_t lastisrtime_us;
+    uint32_t currtime_us = esp_timer_get_time();
+    uint32_t diff = currtime_us - lastisrtime_us;
+    if (diff < 1000) {
+        return; //ignore everything <1ms after an earlier irq
+    }
+    lastisrtime_us = currtime_us;
+
+    ucInterrupted = 1;
 }
 
 /**
@@ -159,13 +174,15 @@ uint32_t AD5940_MCUResourceInit(void *pCfg)
         .pin_bit_mask = (1 << AD5940_RST_PIN)
     };
 
+    // GPIO config for the interrupt pin of AD5940
     gpio_config_t ad5940_int_conf = {
-        .intr_type = GPIO_INTR_POSEDGE,
+        .intr_type = GPIO_INTR_NEGEDGE, // the interrupt triggers on a falling edge
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = 1,
         .pin_bit_mask = (1 << AD5940_GP0INT_PIN)
     };
 
+    // GPIO config for the true CS pin
     gpio_config_t ad5940_cs_conf = {
         .intr_type = GPIO_INTR_DISABLE,
         .mode = GPIO_MODE_OUTPUT,
@@ -174,12 +191,17 @@ uint32_t AD5940_MCUResourceInit(void *pCfg)
     };
 
 	gpio_config(&adf5940_rst_conf);
+
     gpio_config(&ad5940_int_conf);
+    gpio_install_isr_service(0);
+    gpio_set_intr_type(AD5940_GP0INT_PIN, GPIO_INTR_NEGEDGE);
+    gpio_isr_handler_add(AD5940_GP0INT_PIN, ad5940_gpio0_isr_handler, NULL);
+
     gpio_config(&ad5940_cs_conf);
 
     gpio_set_level(AD5940_CS_PIN, 1); // pull CS high, there were scenarios where this was pulled low despite it being defined as pull-up
 
-    printf("GPIO successfully configured");
+    printf("GPIO successfully configured\n");
 
 	esp_err_t ret;
 
@@ -189,7 +211,7 @@ uint32_t AD5940_MCUResourceInit(void *pCfg)
 	ret = spi_bus_add_device(SENDER_HOST, &devcfg, &spi_handle);
 	assert(ret == ESP_OK);
 
-    printf("SPI device successfully attached");
+    printf("SPI device successfully attached\n");
 
     return 0;
 }
